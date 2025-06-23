@@ -2,7 +2,7 @@ use nix::fcntl::{OFlag, open};
 use nix::pty::{PtyMaster, grantpt, posix_openpt, ptsname, unlockpt};
 use nix::sys::stat::Mode;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter};
+use std::io::{BufRead, BufReader};
 use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
 use std::path::Path;
 use std::process::exit;
@@ -50,7 +50,10 @@ fn open_pty() -> nix::Result<(PtyMaster, OwnedFd)> {
     let slave_name = unsafe { ptsname(&master_fd) }?;
 
     // Try to open the slave
-    let slave_fd = open(Path::new(&slave_name), OFlag::O_RDWR, Mode::all())?;
+    let mut mode = Mode::S_IRWXU;
+    mode.insert(Mode::S_IRWXG);
+    mode.insert(Mode::S_IRWXO);
+    let slave_fd = open(Path::new(&slave_name), OFlag::O_RDWR, mode)?;
 
     Ok((master_fd, slave_fd))
 }
