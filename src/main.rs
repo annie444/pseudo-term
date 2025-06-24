@@ -1,52 +1,76 @@
-use nix::fcntl::OFlag;
-use nix::pty::{PtyMaster, grantpt, posix_openpt, ptsname, unlockpt};
-//use nix::sys::stat::Mode;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::os::fd::{FromRawFd, IntoRawFd};
-//use std::path::Path;
+use clap::Parser;
+use nix::cmsg_space;
+use nix::sys::socket::{ControlMessageOwned, MsgFlags, RecvMsg, UnixAddr, recvmsg};
+use std::io::IoSliceMut;
+use std::os::fd::{AsRawFd, RawFd};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::exit;
+use std::thread;
 
-fn main() {
-    let (master, slave) = match open_pty() {
-        Ok(fd) => fd,
-        Err(e) => {
-            eprintln!("Failed to open PTY: {}", e);
-            exit(1);
-        }
-    };
+/// A simple program for allocating pseudo-terminal (PTY) sockets
+/// and handling communication with them.
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    /// The path to where the PTY sockets should be created
+    #[arg()]
+    path: String,
+}
 
-    let master_file = unsafe { File::from_raw_fd(master.into_raw_fd()) };
-
-    println!("PTY opened successfully!");
-    println!("Master FD: {:?}", master_file);
-    println!("Slave FD: {:?}", slave);
-
-    // let mut master_writer = BufWriter::new(
-    //     master_file
-    //         .try_clone()
-    //         .expect("Failed to clone master file"),
-    // );
-    let master_reader = BufReader::new(master_file);
-
-    for line in master_reader.lines() {
-        if let Ok(line) = line {
-            println!("Receiver: {}", line);
-        } else {
-            eprintln!("Failed to read from slave");
+fn handle_client(stream: UnixStream) {
+    let mut cmsg_buffer = cmsg_space!(RawFd);
+    let mut data_buffer = [0u8; 1024]; // Buffer to hold incoming data
+    let mut iov = [IoSliceMut::new(&mut data_buffer)];
+    let received: RecvMsg<'_, '_, UnixAddr> = recvmsg(
+        stream.as_raw_fd(),
+        &mut iov,
+        Some(&mut cmsg_buffer),
+        MsgFlags::empty(),
+    )
+    .unwrap();
+    if let Ok(cmsgs) = received.cmsgs() {
+        for cmsg in cmsgs {
+            match cmsg {
+                ControlMessageOwned::ScmTimestamp(timestamp) => {
+                    // Handle timestamp
+                    println!("Received timestamp: {:?}", timestamp);
+                }
+                ControlMessageOwned::ScmRights(fds) => {
+                    // Handle file descriptors
+                    for fd in fds {
+                        println!("Received file descriptor: {}", fd);
+                        // Here you can handle the received file descriptor, e.g., attach it to a PTY
+                    }
+                }
+                // ... Handle other control message types
+                _ => {
+                    // Handle unrecognized cmsg types
+                    eprintln!("Received unrecognized control message: {:?}", cmsg);
+                }
+            }
         }
     }
 }
 
-fn open_pty() -> nix::Result<(PtyMaster, String)> {
-    let master_fd = posix_openpt(OFlag::O_RDWR)?;
+fn main() {
+    let args = Cli::parse();
+    let socket = UnixListener::bind(&args.path).unwrap_or_else(|e| {
+        eprintln!("Failed to bind to {}: {}", args.path, e);
+        exit(1);
+    });
+    println!("Listening for connections on {}", args.path);
+    for stream in socket.incoming() {
+        match stream {
+            Ok(stream) => {
+                println!("New connection: {:?}", stream);
+                thread::spawn(|| handle_client(stream));
 
-    // Allow a slave to be generated for it
-    grantpt(&master_fd)?;
-    unlockpt(&master_fd)?;
-
-    // Get the name of the slave
-    let slave_name = unsafe { ptsname(&master_fd) }?;
-
-    Ok((master_fd, slave_name))
+                // Here you can handle the communication with the PTY
+                // For example, you could spawn a child process and connect it to the PTY
+            }
+            Err(e) => {
+                eprintln!("Connection failed: {}", e);
+            }
+        }
+    }
 }
