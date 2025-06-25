@@ -1,0 +1,4 @@
+[submodule "crun"]
+	path = crun-src
+	url = git@github.com:containers/crun.git
+	branch = main
