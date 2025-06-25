@@ -89,12 +89,23 @@ fn set_term<Fd: AsFd>(fd: &Fd) -> Result<()> {
     Ok(())
 }
 
+fn send_term(term: OwnedFd, term_tx: Sender<OwnedFd>) -> Result<()> {
+    // Send the terminal file descriptor to the main thread
+    if let Err(e) = term_tx.send(term) {
+        eprintln!("Failed to send terminal fd: {}", e);
+        return Err(anyhow::anyhow!("Failed to send terminal fd"));
+    } else {
+        println!("Terminal fd sent successfully");
+    }
+    Ok(())
+}
+
 fn handle_client(stream: UnixStream, term_tx: Sender<OwnedFd>) -> Result<()> {
     let term = receive_fd_from_socket_with_payload(stream, None)?;
     let term = unsafe { OwnedFd::from_raw_fd(term) };
     set_term(&term)?;
     println!("Terminal fd: {}", term.as_fd().as_raw_fd());
-
+    send_term(term, term_tx)?;
     Ok(())
 }
 
